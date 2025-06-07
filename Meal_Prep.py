@@ -9,7 +9,8 @@ import pandas as pd
 if 'checked_items' not in st.session_state:
     st.session_state.checked_items = {}
 
-# ----- Define Recipes with units -----
+# ----- Define Recipes with units and optional tags -----
+# Format: ingredient: (quantity, unit)
 recipes = {
     "Pasta Bolognese": {
         "Spaghetti": (2, "servings"),
@@ -24,7 +25,8 @@ recipes = {
         "Onion": (1, "pieces"),
         "Broccoli": (0.5, "pieces"),
         "Meat": (2, "servings"),
-        "Rice": (0.75, "cups")
+        "Rice": (0.75, "cups"),
+        "_tags": ["leftover"]
     },
     "Creamy Mushroom": {
         "Mushroom": (6, "pieces"),
@@ -43,7 +45,8 @@ recipes = {
         "Garlic": (1, "clove"),
         "Broccoli": (0.5, "pieces"),
         "Eggs": (2, "pieces"),
-        "Meat": (2, "servings")
+        "Meat": (2, "servings"),
+        "_tags": ["leftover"]
     },
     "Carbonara": {
         "Mushroom": (5, "pieces"),
@@ -63,7 +66,8 @@ recipes = {
         "Flour": (2, "tbsp"),
         "Cheese": (2, "slices"),
         "Broccoli": (0.5, "pieces"),
-        "Meat": (2, "servings")
+        "Meat": (2, "servings"),
+        "_tags": ["leftover"]
     },
     "Dashi Noodles":{
         "Noodles": (2, "servings"),
@@ -112,7 +116,8 @@ recipes = {
         "Chicken Fillet": (2, "servings"),
         "Fish Sauce": (1,"tbsp"),
         "Jap Curry Cubes": (1.5,"cubes"),
-        "Eggs": (2,"pieces")
+        "Eggs": (2,"pieces"),
+        "_tags": ["leftover"]
     }
 }
 
@@ -166,30 +171,35 @@ with tab3:
         available_meals = list(set(recipes.keys()) - set(must_include_meals))
         random.shuffle(available_meals)
         needed = meals_to_plan - len(must_include_meals)
-        selected_meals = must_include_meals + available_meals[:needed]
+        selected_meals = must_include_meals + random.choices(available_meals, k=needed)
         random.shuffle(selected_meals)
 
         plan = {}
         pool = selected_meals.copy()
 
-        for day in DAYS:
+        for i, day in enumerate(DAYS):
             plan[day] = {}
-            for meal in MEALS:
+            for j, meal in enumerate(MEALS):
                 if meal in meals_eaten_out.get(day, []):
                     plan[day][meal] = "Eating Out"
+                elif i > 0 and meal == "Lunch":
+                    prev_dinner = plan[DAYS[i - 1]]["Dinner"]
+                    if prev_dinner in recipes and "_tags" in recipes[prev_dinner] and "leftover" in recipes[prev_dinner]["_tags"]:
+                        plan[day][meal] = prev_dinner
+                    else:
+                        plan[day][meal] = pool.pop() if pool else "No Meal Planned"
                 else:
-                    if not pool:
-                        pool = selected_meals.copy()
-                        random.shuffle(pool)
-                    plan[day][meal] = pool.pop()
-
+                    plan[day][meal] = pool.pop() if pool else "No Meal Planned"
 
         grocery_list = defaultdict(lambda: defaultdict(float))
         for day in DAYS:
             for meal in MEALS:
                 m = plan[day][meal]
                 if m not in ("Eating Out", "No Meal Planned"):
-                    for ing, (qty, unit) in recipes[m].items():
+                    for ing, val in recipes[m].items():
+                        if ing == "_tags":
+                            continue
+                        qty, unit = val
                         grocery_list[ing][unit] += qty
 
         st.session_state.week_plan = plan
