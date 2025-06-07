@@ -2,7 +2,7 @@
 # coding: utf-8
 
 import streamlit as st
-from collections import defaultdict
+from collections import defaultdict, Counter
 import random
 import pandas as pd
 
@@ -10,7 +10,6 @@ if 'checked_items' not in st.session_state:
     st.session_state.checked_items = {}
 
 # ----- Define Recipes with units and optional tags -----
-# Format: ingredient: (quantity, unit)
 recipes = {
     "Pasta Bolognese": {
         "Spaghetti": (2, "servings"),
@@ -25,8 +24,7 @@ recipes = {
         "Onion": (1, "pieces"),
         "Broccoli": (0.5, "pieces"),
         "Meat": (2, "servings"),
-        "Rice": (0.75, "cups"),
-        "_tags": ["leftover"]
+        "Rice": (0.75, "cups")
     },
     "Creamy Mushroom": {
         "Mushroom": (6, "pieces"),
@@ -45,8 +43,7 @@ recipes = {
         "Garlic": (1, "clove"),
         "Broccoli": (0.5, "pieces"),
         "Eggs": (2, "pieces"),
-        "Meat": (2, "servings"),
-        "_tags": ["leftover"]
+        "Meat": (2, "servings")
     },
     "Carbonara": {
         "Mushroom": (5, "pieces"),
@@ -78,7 +75,8 @@ recipes = {
         "Onion": (1,"pieces"),
         "Broccoli": (0.5,"pieces"),
         "Bacon/Ham": (2,"slices"),
-        "Fish/Meatball": (4,"pieces")
+        "Fish/Meatball": (4,"pieces"),
+        "_tags": ["day_out"]
     },
     "Indomee": {
         "Indomee": (2,"packets"),
@@ -107,7 +105,8 @@ recipes = {
         "Broccoli": (0.5,"pieces"),
         "Eggs": (2,"pieces"),
         "Meat": (2,"servings"),
-        "Capsicum":(1,"cup")
+        "Capsicum":(1,"cup"),
+        "_tags": ["dinner_only"]
     },
     "Jap Curry Omurice": {
         "Garlic": (1, "clove"),
@@ -116,43 +115,35 @@ recipes = {
         "Chicken Fillet": (2, "servings"),
         "Fish Sauce": (1,"tbsp"),
         "Jap Curry Cubes": (1.5,"cubes"),
-        "Eggs": (2,"pieces"),
-        "_tags": ["leftover"]
+        "Eggs": (2,"pieces")
     }
 }
 
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 MEALS = ["Lunch", "Dinner"]
 
-# -------------------- Styling --------------------
-st.markdown("""
-<style>
-    .stCheckbox > label {
-        font-size: 0.9rem;
-    }
-    .stApp {
-        padding: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+if "day_out_only_slots" not in st.session_state:
+    st.session_state.day_out_only_slots = {}
 
-# -------------------- Session State --------------------
-if "generate" not in st.session_state:
-    st.session_state.generate = False
-if "week_plan" not in st.session_state:
-    st.session_state.week_plan = {}
-if "grocery_list" not in st.session_state:
-    st.session_state.grocery_list = {}
-if "checked_items" not in st.session_state:
-    st.session_state.checked_items = {}
-
-# -------------------- App Layout --------------------
-st.title("🥗 Weekly Meal Planner")
-tab1, tab2, tab3 = st.tabs(["📅 Meal Plan", "🛒 Grocery List", "⚙️ Settings"])
+if "preselected_meals" not in st.session_state:
+    st.session_state.preselected_meals = {}
 
 with tab3:
     st.markdown("### ✅ Must-Include Meals")
     must_include_meals = st.multiselect("Choose meals to include this week:", list(recipes.keys()))
+
+    st.markdown("### 🍽️ Preselected Meals")
+    preselected = {}
+    for day in DAYS:
+        st.session_state.preselected_meals.setdefault(day, {})
+        cols = st.columns(2)
+        for i, meal in enumerate(MEALS):
+            preselected_meal = cols[i].selectbox(
+                f"{day} {meal} (Optional)", ["None"] + list(recipes.keys()),
+                key=f"preselect_{day}_{meal}"
+            )
+            if preselected_meal != "None":
+                st.session_state.preselected_meals[day][meal] = preselected_meal
 
     st.markdown("### 🚫 Meals Eaten Out")
     meals_eaten_out = {}
@@ -163,6 +154,14 @@ with tab3:
             if cols[i].checkbox(f"{day} {meal}", key=key):
                 meals_eaten_out.setdefault(day, []).append(meal)
 
+    st.markdown("### 🏞️ Day Out Only Slots")
+    for day in DAYS:
+        cols = st.columns(2)
+        for i, meal in enumerate(MEALS):
+            key = f"dayout_{day}_{meal}"
+            if cols[i].checkbox(f"{day} {meal}", key=key):
+                st.session_state.day_out_only_slots.setdefault(day, []).append(meal)
+
     if st.button("🔁 Generate Meal Plan"):
         total_slots = 14
         meals_out_count = sum(len(v) for v in meals_eaten_out.values())
@@ -171,25 +170,40 @@ with tab3:
         available_meals = list(set(recipes.keys()) - set(must_include_meals))
         random.shuffle(available_meals)
         needed = meals_to_plan - len(must_include_meals)
-        selected_meals = must_include_meals + random.choices(available_meals, k=needed)
-        random.shuffle(selected_meals)
-
+        selected_meals = must_include_meals + random.choices(available_meals, k=needed*2)
+        meal_counter = Counter()
         plan = {}
         pool = selected_meals.copy()
 
         for i, day in enumerate(DAYS):
             plan[day] = {}
             for j, meal in enumerate(MEALS):
+                pre = st.session_state.preselected_meals.get(day, {}).get(meal)
+                if pre:
+                    plan[day][meal] = pre
+                    meal_counter[pre] += 1
+                    continue
                 if meal in meals_eaten_out.get(day, []):
                     plan[day][meal] = "Eating Out"
                 elif i > 0 and meal == "Lunch":
                     prev_dinner = plan[DAYS[i - 1]]["Dinner"]
                     if prev_dinner in recipes and "_tags" in recipes[prev_dinner] and "leftover" in recipes[prev_dinner]["_tags"]:
                         plan[day][meal] = prev_dinner
-                    else:
-                        plan[day][meal] = pool.pop() if pool else "No Meal Planned"
+                        meal_counter[prev_dinner] += 1
+                        continue
+                while pool:
+                    candidate = pool.pop()
+                    if meal == "Lunch" and "dinner_only" in recipes.get(candidate, {}).get("_tags", []):
+                        continue
+                    if day in st.session_state.day_out_only_slots and meal in st.session_state.day_out_only_slots[day]:
+                        if "day_out" not in recipes.get(candidate, {}).get("_tags", []):
+                            continue
+                    if meal_counter[candidate] < 3:
+                        plan[day][meal] = candidate
+                        meal_counter[candidate] += 1
+                        break
                 else:
-                    plan[day][meal] = pool.pop() if pool else "No Meal Planned"
+                    plan[day][meal] = "No Meal Planned"
 
         grocery_list = defaultdict(lambda: defaultdict(float))
         for day in DAYS:
@@ -206,41 +220,3 @@ with tab3:
         st.session_state.grocery_list = grocery_list
         st.session_state.checked_items = {}
         st.session_state.generate = True
-
-with tab1:
-    if st.session_state.generate:
-        st.subheader("🗓️ Weekly Meal Plan")
-        def make_plan_df(plan):
-            data = {day: [plan[day]["Lunch"], plan[day]["Dinner"]] for day in DAYS}
-            return pd.DataFrame(data, index=["Lunch", "Dinner"]).T
-
-        df = make_plan_df(st.session_state.week_plan)
-        st.dataframe(df, use_container_width=True)
-
-with tab2:
-    if st.session_state.grocery_list:
-        st.subheader("🛒 Grocery List (Check Items Off – Sorted)")
-
-        items = []
-        for ing, unit_dict in st.session_state.grocery_list.items():
-            for unit, qty in unit_dict.items():
-                qty_disp = int(qty) if qty.is_integer() else round(qty, 2)
-                key = f"{ing}_{unit}"
-                checked = st.session_state.checked_items.get(key, False)
-                items.append((checked, ing, unit, qty_disp, key))
-
-        items.sort(key=lambda x: (x[0], x[1]))
-
-        st.markdown("### ✅ To Buy")
-        for checked, ing, unit, qty_disp, key in items:
-            if not checked:
-                st.session_state.checked_items[key] = st.checkbox(
-                    f"{ing}: {qty_disp} {unit}", key=key, value=checked
-                )
-
-        st.markdown("---\n### ✔️ Bought")
-        for checked, ing, unit, qty_disp, key in items:
-            if checked:
-                st.session_state.checked_items[key] = st.checkbox(
-                    f"~~{ing}: {qty_disp} {unit}~~", key=key, value=checked
-                )
