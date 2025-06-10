@@ -49,6 +49,7 @@ recipes = {
         "Broccoli": (0.5, "pieces"),
         "Eggs": (2, "pieces"),
         "Meat": (2, "servings"),
+        "Rice": (0.75,"cups"),
         "_tags": ["leftover"]
     },
     "Carbonara": {
@@ -68,9 +69,10 @@ recipes = {
         "Onion": (1, "pieces"),
         "Chicken Stock": (1, "cubes"),
         "Flour": (2, "tbsp"),
-        "Cheese": (2, "slices"),
+        "Cheese": (4, "slices"),
         "Broccoli": (0.5, "pieces"),
         "Meat": (2, "servings"),
+        "Rice": (0.75,"cups"),
         "_tags": ["leftover"]
     },
     "Dashi Noodles":{
@@ -125,12 +127,26 @@ recipes = {
         "Fish Sauce": (1,"tbsp"),
         "Jap Curry Cubes": (1.5,"cubes"),
         "Eggs": (2,"pieces"),
+        "Rice": (0.75,"cups"),
         "_tags": ["leftover"]
     },
     "Crackers and Dip": {
         "Crackers": (1,"piece"),
         "Dip": (1,"piece"),
         "_tags": ["light_meal"]
+    },
+    "Big Breakfast": {
+        "Hashbrown": (2,"pieces"),
+        "Eggs": (2,"pieces"),
+        "Chicken Fillet": (2, "pieces"),
+        "_tags": ["lunch_only"]
+    },
+    "Seafood Bites": {
+        "Seafood Bites": (8,"pieces"),
+        "Broccoli": (0.5,"pieces"),
+        "Squid Ball": (4,"pieces"),
+        "Rice": (0.75,"cups"),
+        "_tags": ["dinner_only"]
     }
 }
 
@@ -168,7 +184,7 @@ tab1, tab2, tab3 = st.tabs(["📅 Meal Plan", "🛒 Grocery List", "⚙️ Setti
 
 with tab3:
     st.markdown("### ✅ Must-Include Meals")
-    must_include_meals = st.multiselect("Choose meals to include this week:", list(recipes.keys()))
+    must_include_meals = st.multiselect("Choose meals to include this week:", sorted(recipes.keys()))
 
     st.markdown("### 🚫 Meals Eaten Out")
     meals_eaten_out = {}
@@ -196,25 +212,27 @@ with tab3:
 
     # UI for preselecting meals
     st.markdown("### 📝 Preselect Meals for Specific Days")
-
+    sorted_recipes = sorted(recipes.keys())
+    
     for day in DAYS:
         with st.expander(day):
             cols = st.columns(len(MEALS))
             for i, meal in enumerate(MEALS):
                 key = f"preselect_{day}_{meal}"
                 current_val = st.session_state.preselected_meals[day][meal]
-
+                
                 if current_val in recipes:
-                    index = list(recipes.keys()).index(current_val) + 1  # +1 for None at index 0
+                    index = sorted_recipes.index(current_val) + 1 if current_val in sorted_recipes else 0
                 else:
                     index = 0
 
                 choice = cols[i].selectbox(
                     f"{meal}",
-                    options=[None] + list(recipes.keys()),
+                    options=[None] + sorted_recipes,
                     index=index,
                     key=key,
                 )
+
 
                 # Update the nested dict in session_state safely
                 day_meals = st.session_state.preselected_meals[day].copy()
@@ -256,15 +274,22 @@ with tab3:
 
         # Prepare a helper function to get next meal for slot respecting constraints
         def get_next_meal_for_slot(meal_time):
-            # Candidates filtered by repetition < MAX_REPETITION
             if meal_time == "Dinner":
-                candidates = [m for m in pool_meals.union(dinner_only_meals) if repetition_counter[m] < MAX_REPETITION]
-            else:
-                candidates = [m for m in pool_meals if m not in dinner_only_meals and repetition_counter[m] < MAX_REPETITION]
-
+                candidates = [
+                    m for m in pool_meals.union(dinner_only_meals)
+                    if repetition_counter[m] < MAX_REPETITION
+                    and "lunch_only" not in recipes[m].get("_tags", [])
+                ]
+            else:  # Lunch
+                candidates = [
+                    m for m in pool_meals
+                    if m not in dinner_only_meals
+                    and repetition_counter[m] < MAX_REPETITION
+                ]
             if not candidates:
                 return None
             return random.choice(candidates)
+
 
         # Start filling the plan
         # Steps:
@@ -297,7 +322,10 @@ with tab3:
                         break
                     if plan[day][meal_time] is None and repetition_counter[meal] < MAX_REPETITION:
                         # Check if dinner_only tag restricts slot
-                        if "dinner_only" in recipes[meal].get("_tags", []) and meal_time != "Dinner":
+                        tags = recipes[meal].get("_tags", [])
+                        if "dinner_only" in tags and meal_time != "Dinner":
+                            continue
+                        if "lunch_only" in tags and meal_time != "Lunch":
                             continue
                         plan[day][meal_time] = meal
                         repetition_counter[meal] += 1
@@ -350,7 +378,7 @@ with tab1:
 
         df = make_plan_df(st.session_state.week_plan)
         st.dataframe(df, use_container_width=True)
-
+        
 with tab2:
     if st.session_state.grocery_list:
         st.subheader("🛒 Grocery List (Check Items Off – Sorted)")
@@ -378,3 +406,47 @@ with tab2:
                 st.session_state.checked_items[key] = st.checkbox(
                     f"~~{ing}: {qty_disp} {unit}~~", key=key, value=checked
                 )
+                
+                
+import io
+
+if st.session_state.generate and st.session_state.grocery_list:
+    # Meal Plan CSV section
+    meal_csv = df.to_csv(index=True, index_label="Day")
+
+    # Grocery List: only include items not checked off as "bought"
+    grocery_items = []
+    for ing, unit_dict in st.session_state.grocery_list.items():
+        for unit, qty in unit_dict.items():
+            key = f"{ing}_{unit}"
+            checked = st.session_state.checked_items.get(key, False)
+            if not checked:  # To Buy only
+                qty_disp = int(qty) if qty.is_integer() else round(qty, 2)
+                grocery_items.append({
+                    "Ingredient": ing,
+                    "Quantity": qty_disp,
+                    "Unit": unit
+                })
+
+    # Convert grocery items to CSV
+    grocery_items.sort(key=lambda x: x["Ingredient"])  # Sort alphabetically
+    grocery_df = pd.DataFrame(grocery_items)
+    grocery_csv = grocery_df.to_csv(index=False)
+
+    # Combine both sections into one string
+    combined_csv = io.StringIO()
+    combined_csv.write("Meal Plan\n")
+    combined_csv.write(meal_csv)
+    combined_csv.write("\nGrocery List\n")
+    combined_csv.write(grocery_csv)
+
+    # Encode for download
+    combined_csv.seek(0)
+    csv_data = combined_csv.getvalue().encode('utf-8')
+
+    st.download_button(
+        label="📥 Download Combined Meal Plan & Grocery List (CSV)",
+        data=csv_data,
+        file_name="meal_and_grocery.csv",
+        mime="text/csv"
+    )
